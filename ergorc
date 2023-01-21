@@ -1,0 +1,477 @@
+#!/bin/bash
+
+#
+# note: TERM is typically set by Konsole via environment
+#
+
+#
+# detect cygwin
+#
+cygwin=false;
+case "$(uname)" in
+  CYGWIN*) cygwin=true;
+    ;;
+esac
+
+#
+# environment
+#
+export PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/bin/X11:~/.bin:~/.local/bin
+
+#
+# aliases
+#
+alias m='more ';
+alias man='man -P "less -F -X"'
+alias mm='less -F -X -e';
+alias als='ls --color=always'; # to temporarily disable, use: unalias ls or pls
+alias pls='ls --color=never '; # do not use colors
+alias l='als -lF ';
+alias lh='als -lh ';
+alias ll='als -lAF ';
+alias lm='l | m ';
+alias llm='ll | m '
+alias lsd='als -lAd */ '; # list only directories
+alias ltr='l -tr'; # list in reverse order of creation/modified time
+alias lltr='als -lAFtr'; # list in reverse order of creation/modified time
+alias g='grep ';
+alias md='mkdir ';
+alias rd='rmdir ';
+alias ..='cd ..;pwd ';
+alias ...='cd ../..;pwd ';
+alias ....='cd ../../..;pwd ';
+alias .....='cd ../../../..;pwd ';
+alias rm='rm -i ';
+alias h='history ';
+alias d='dirs -l -p -v ';
+alias p='pushd ';
+alias o='popd ';
+alias diff='colordiff ';
+
+HISTCONTROL=ignoreboth;
+HISTIGNORE=l:ll:h:rmj:lm:llm:ls:lsa:lsd:ltr:d:m
+# increase bash history
+HISTSIZE=-1
+# increase bash history file size
+HISTFILESIZE=-1
+HISTTIMEFORMAT='%F %T ';
+
+shopt -s no_empty_cmd_completion
+#bind "TAB:menu-complete"
+#bind "set show-all-if-ambiguous on"
+
+#
+# functions
+#
+# handy shortcut to return to previous current directory
+function -() {
+    cd -;
+}
+
+function /() {
+    cd /;
+}
+
+function xx() {
+    clipboard | head -4; echo "";
+}
+
+#
+# make numbered backups
+#
+function cpn() {
+    touch .normj;
+    src="$1";
+    dst=".${src}.wip";
+    cp --backup=numbered "$src" "$dst";
+    find . -name "${dst}*" -printf "%T+\t%p\n" | sort | tail -2 | sort -r;
+}
+
+#
+# list numbered backups
+#
+function lln() {
+    src="$1";
+    dst=".${src}.wip";
+    find . -name "${dst}*" -printf "%T+\t%p\n" | sort | tail -2 | sort -r;
+}
+
+
+function jj() {
+    # todo: skip if we're only one directory deep
+    # todo: use elipses to compress long directory names
+
+    declare -a elements;
+
+    x="${PWD/$HOME/\~}";
+
+    # count number of /
+    s="${x//[^\/]}";
+
+    if [ "$x" == '~' -o "$x" == '/' ]; then
+	echo "$PWD";
+	return 0;
+    fi
+
+    limit=$(($(wc -c <<<"$PWD") + 4))
+    printf -- '-%.0s' {1..$(seq 1 $limit)}; echo;
+    echo "Enter index to cd into:";
+    printf -- '-%.0s' {1..$(seq 1 $limit)}; echo;
+    i=0;
+    while [ "$x" != '/' -a "$x" != '~' ]; do
+	printf '[%2s] %s' "$i" "$x"; echo;
+	elements[$i]="$x";
+
+	x="$(dirname $x)";
+	i=$[$i+1];
+    done
+    printf -- '=%.0s' {1..$(seq 1 $limit)}; echo;
+
+    read;
+    if [ "$REPLY" -ge 0 -a "$REPLY" -le "${#s}" ] 2>/dev/null; then
+	x="${elements[$REPLY]/#\~/$HOME}"
+	cd "$x";
+    fi
+}
+
+function prompt {
+    msg="$1";
+
+    read -p "$msg? [Y/n]"
+
+    if [ -z "$REPLY" -o "$REPLY" == "y" -o "$REPLY" == "Y" ]; then
+	return 0;
+    else
+	return 1;
+    fi
+}
+
+#
+# removes emacs backup files
+#
+function rmj() {
+    startdir="${1:-.}";
+
+    if [ ! -d "$startdir" ]; then
+	echo "Non-existant dir";
+	return 0;
+    fi
+
+    if [ -f "$startdir/.normj" ]; then
+	echo "Found .normj. Exiting.";
+	return 0;
+    fi
+
+    findcmd='find "$startdir" \( -name \*~ -o -name .\*~ -o -name \#*\#  -o -name .\#* -o -name \*.pyc \)';
+
+    retval=$(eval "$findcmd");
+    if [ -z "$retval" ]; then
+	echo "${1:-$(pwd)}/* is clean";
+	return 0;
+    else
+	echo "$retval";
+    fi
+
+    if ! prompt "Descend and delete"; then
+	return 0;
+    fi
+
+    findcmd="$findcmd -exec rm {} \;";
+    eval "$findcmd";
+
+    eval 'find . -type d -empty -name __pycache__ -delete';
+}
+
+# git branch
+function parse_git_branch {
+    git branch --no-color 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/(* \1)/'
+}
+
+function xfill {
+    TERMWIDTH=${COLUMNS}
+    promptsize=$(echo -n "{yyyy-mm-dd HH:MM:ss}[$(pwd)] " | wc -c | tr -d " ")
+
+    branchsize=$(git branch --no-color 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/(* \1)/' | wc -c);
+
+    padding=8;
+    venv_padding=$(basename "$VIRTUAL_ENV" | wc -c)
+    fillsize=$((TERMWIDTH-promptsize-branchsize-padding-venv_padding))
+    fill=""
+    while [ "$fillsize" -gt "0" ]; do
+	fill="${fill}_"
+	fillsize=$((fillsize-1))
+    done
+
+    # if [ "$fillsize" -lt "0" ]; then
+    #     cut=$((3-fillsize))
+    #     newPWD="...$(echo -n $PWD | sed -e "s/\(^.\{$cut\}\)\(.*\)/\2/")"
+    # fi
+
+    echo -n $fill
+}
+
+#
+# Vanilla prompt
+#
+function vp() {
+    if [ "$UID" = 0 ];then
+	PS1="#";
+    else
+	PS1="$";
+    fi
+}
+
+#
+# ergo prompt
+#
+function ep() {
+    # verbose command prompt off
+    set +v
+
+    # color codes
+    clr_green="\[\033[32m\]";
+    clr_white="\[\033[0m\]";
+    clr_blue="\[\033[34m\]";
+    clr_lightblue="\[\033[1;34m\]";
+    clr_red="\[\033[31m\]";
+    clr_lightgray="\[\033[0;37m\]";
+    clr_darkgray="\[\033[1;30m\]";
+    clr_brown="\[\033[0;33m\]";
+    clr_magenta="\[\033[0;35m\]";
+
+    # ergo prompt variables / colors
+    clr_path=$clr_green;
+    clr_bg=$clr_white;
+    clr_host=$clr_red;
+    clr_bar=$clr_lightgray;
+    clr_branch=$clr_magenta;
+    clr_user=$clr_lightblue;
+    clr_dir=$clr_lightblue;
+
+    #
+    # ergo xterm prompt (black text on white background)
+    #
+    if [[ -n "${xterm#$TERM}" ]]; then
+	clr_user=$clr_blue;
+	clr_dir=$clr_blue;
+    fi
+
+    #
+    # ergo linux prompt (white text on black background)
+    #
+    if [ "$TERM" == 'linux' ]; then
+	clr_user=$clr_lightblue;
+	clr_dir=$clr_lightblue;
+    fi
+
+    PS1="$clr_bar{\D{%Y-%m-%d} \t}$clr_bg$clr_path[\$(pwd)]$clr_bg \$(xfill)$clr_branch\$(parse_git_branch)$clr_bg\n$clr_user\u$clr_bg@$clr_host\h$clr_bg$clr_dir \W $clr_bg\$ "
+
+    # pin prompt to bottom of terminal
+    # PS1='\[\e[$LINES;1H\]'$PS1
+
+    #################################################################
+    # bash prompt color codes
+
+    #"\[\033[0;30m\]" # Black
+    #"\[\033[1;30m\]" # Dark Gray
+    #"\[\033[0;31m\]" # Red
+    #"\[\033[1;31m\]" # Light Red
+    #"\[\033[0;32m\]" # Green
+    #"\[\033[1;32m\]" # Light Green
+    #"\[\033[0;33m\]" # Brown
+    #"\[\033[1;33m\]" # Yellow
+    #"\[\033[0;34m\]" # Blue
+    #"\[\033[1;34m\]" # Light Blue
+    #"\[\033[0;35m\]" # Magenta
+    #"\[\033[1;35m\]" # Light Magenta
+    #"\[\033[0;36m\]" # Cyan
+    #"\[\033[1;36m\]" # Light
+    #"\[\033[0;37m\]" # Light Gray
+    #"\[\033[1;37m\]" # White
+    #"\[\033[0m\]"    # Neutral
+
+    # Octal listing of colors
+    #Black 0;30      Dark Gray 1;30
+    #Blue 0;34       Light Blue 1;34
+    #Green 0;32      Light Green 1;32
+    #Cyan 0;36       Light Cyan 1;36
+    #Red 0;31        Light Red 1;31
+    #Magenta 0;35    Light Magenta 1;35
+    #Brown 0;33      Yellow 1;33
+    #Light Gray 0;37 White 1;37
+    #################################################################
+} # end ergo prompt
+
+#
+# ergo dir colors
+#
+if [[ -n "${xterm#$TERM}" ]]; then
+    eval "$(dircolors --sh ~/.ergo/.dir_colors_xterm)";
+elif [ "$TERM" = "xterm-256color" ]; then
+    eval "$(dircolors --sh ~/.ergo/.dir_colors_xterm_256)";
+elif [ "$TERM" = "linux" ]; then
+    eval "$(dircolors --sh ~/.ergo/.dir_colors_linux)";
+fi
+
+#
+# use the ergo prompt
+#
+ep;
+
+#
+# cygwin customizations
+#
+if $cygwin; then
+    #
+    # emacs
+    #
+    function e() {
+	/cygdrive/c/utils/emacs/bin/runemacs.exe "$(cygpath -w $1)";
+    }
+
+
+    #
+    # cdargs
+    #
+    . /usr/share/cdargs/cdargs-lib.sh
+    . /usr/share/cdargs/cdargs-alias.sh
+    . /usr/share/cdargs/cdargs-bash-completion.sh
+
+    #
+    # Launch Microsoft Word
+    #
+    function ww() {
+	/cygdrive/c/Program\ Files/Microsoft\ Office/OFFICE11/WINWORD.EXE "$1" &
+    }
+
+    #
+    # Launch Microsoft Excel
+    #
+    function xl() {
+	/cygdrive/c/Program\ Files/Microsoft\ Office/OFFICE11/EXCEL.EXE "$1" &
+    }
+
+    #
+    # Launch Windows Explorer in the current directory
+    #
+    function eh() {
+	explorer /e, "$(pwd | cygpath -w -f -)" &
+    }
+else # non-cygwin customizations
+    #
+    # emacs
+    #
+    function e() {
+	# if terminal string contains xterm prefix
+	if [ "$TERM" = 'linux' ]; then
+	    (emacs "$1");
+	elif [ -n ${xterm#$TERM} ]; then
+	    for file in "$@"; do
+		(emacs "$file" &);
+	    done
+	fi
+    }
+
+    function ee() {
+	retval="$(clipboard)";
+	if [ -z "$retval" ]; then
+	    echo "Empty clipboard";
+	    return 0;
+	fi
+
+	if [ ! -e "$retval" ]; then
+	    echo "Clipboard does not point to a file: ${retval:0:16}";
+	    return 0;
+	fi
+
+	if prompt "Open $retval"; then
+	    e "$(clipboard)";
+	fi
+    }
+
+    function pp() {
+	# Convert expire hours to minutes; use default 60, if needed.
+	expire="$((${1:-1} * 60))"
+
+	key='9f687456e8520a29118655bd36b4720a';
+	data="key=$key&expire=$expire&format=simple&return=raw";
+
+	#
+	# Paste to paste.ee
+	#
+	retval="$(clipboard)";
+	if [ -z "$retval" ]; then
+	    echo "Empty clipboard"; return 0;
+	else
+	    is_text=$(echo "$retval" | file - | grep -i 'ascii');
+
+	    if [[ ! "$is_text" =~ .*'ASCII'.* ]]; then
+		echo 'Not text'; return 0;
+	    fi
+
+	    echo '----------------------------------------';
+	    echo 'Clipboard extract';
+	    echo '----------------------------------------';
+	    echo "${retval:0:1024}";
+	    echo '----------------------------------------';
+	    echo "Set to expire in: ${1:-1} hour/s";
+	    echo '========================================';
+	fi
+
+	if ! prompt "Paste to paste.ee"; then
+	    return 0;
+	fi
+
+	data="$data&paste=$retval";
+	retval=$(curl -s --data "$data" https://paste.ee/api);
+
+	file="/tmp/$(basename $retval)";
+	clipboard > "$file";
+
+	echo '========================================';
+	echo "link : $retval";
+	echo "cache: $file";
+	echo '========================================';
+
+    }
+
+    export EDITOR='/usr/bin/emacs -nw'
+
+    show_command_in_title_bar() {
+	case "$BASH_COMMAND" in
+	    *\033]0*|*\\e]0*)
+		# The command is trying to set the title bar as well;
+		# this is most likely the execution of $PROMPT_COMMAND.
+		# In any case nested escapes confuse the terminal, so don't
+		# output them.
+		;;
+	    *'. ~/.ergo/.customrc'*)
+		#
+		# ignore last command executed by ergo. start with clean slate
+		#
+		;&
+	    *'ls'*)
+		# ignore
+		printf "\e]0;%s@%s\a" "${USER}" "${HOSTNAME}";
+		;;
+	    *)
+		printf "\e]0;%s@%s: %s\a" "${USER}" "${HOSTNAME}" "${BASH_COMMAND}";
+		;;
+	esac
+    }
+    trap show_command_in_title_bar DEBUG
+fi
+
+function higrep() {
+    grep --color -E "$1|$2|$3|$4|$";
+}
+
+# include user customizations
+if [ -f ~/.ergo/.sensible ]; then
+    . ~/.ergo/.sensible;
+fi
+
+# include user customizations
+if [ -f ~/.ergo/.customrc ]; then
+    . ~/.ergo/.customrc;
+fi
